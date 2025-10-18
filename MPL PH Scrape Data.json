@@ -1,0 +1,585 @@
+{
+  "name": "MPL PH Scrape Data",
+  "nodes": [
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -256,
+        -208
+      ],
+      "id": "b9d62ae4-e365-4247-a107-9db47145b409",
+      "name": "When clicking ‘Execute workflow’"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.fullUrl }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -80,
+        32
+      ],
+      "id": "bdecfe55-29f6-4d59-ac08-574f8edf9867",
+      "name": "HTTP Request"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- 1. Get Input Data ---\n// Assuming $input.all()[0] contains all the extracted HTML data for a single match (1 link)\nconst inputItem = $input.all()[0].json;\n\nconst team1Values = inputItem.Team1_Value; \nconst team2Values = inputItem.Team2_Value; \nconst loseTeamArray = inputItem.Lose_Team || []; \nconst winTeamName = inputItem.Win_Team; // Assumed winner of Game 1 (single string)\nconst urlContent = inputItem.Date_Value?.content || ''; \n\n// --- 2. Determine Dynamic Team Names ---\n\n// 1. Collect all known team names from the input\nlet teamNames = [];\nif (winTeamName) {\n    teamNames.push(winTeamName);\n}\n// 2. Add all team names from the Lose_Team array\nteamNames = teamNames.concat(loseTeamArray);\n\n// 3. Filter to get the two unique team names\nconst UNIQUE_TEAM_NAMES = teamNames.filter(name => name).filter((v, i, a) => a.indexOf(v) === i);\n\n// Assign them dynamically. PRIMARY_TEAM will be the team associated with team1Values.\nconst PRIMARY_TEAM = UNIQUE_TEAM_NAMES[0] || 'Team_A';\nconst SECONDARY_TEAM = UNIQUE_TEAM_NAMES[1] || 'Team_B';\n\n// --- 3. Extract and Format Date ---\nconst dateMatch = urlContent.match(/(\\d{8})$/); \nlet formattedDate = 'Date Not Found';\n\nif (dateMatch && dateMatch[1]) {\n    const dateString = dateMatch[1];\n    formattedDate = `${dateString.substring(0, 4)}-${dateString.substring(4, 6)}-${dateString.substring(6, 8)}`;\n}\n\n// --- 4. Filter Arrays for Games ---\nconst GAME_LENGTH = 12; // 12 stats per game\n\n// Game 1: Index 0 to 11\nconst game1_team1 = team1Values ? team1Values.slice(0, GAME_LENGTH) : [];\nconst game1_team2 = team2Values ? team2Values.slice(0, GAME_LENGTH) : [];\n\n// Game 2: Index 12 to 23\nconst game2_team1 = team1Values ? team1Values.slice(GAME_LENGTH, GAME_LENGTH * 2) : [];\nconst game2_team2 = team2Values ? team2Values.slice(GAME_LENGTH, GAME_LENGTH * 2) : [];\n\n// Game 3: Index 24 to 35\nconst game3_team1 = team1Values ? team1Values.slice(GAME_LENGTH * 2, GAME_LENGTH * 3) : [];\nconst game3_team2 = team2Values ? team2Values.slice(GAME_LENGTH * 2, GAME_LENGTH * 3) : [];\n\n\n// --- 5. Define Stat Categories ---\nconst STAT_NAMES = [\n    \"Total Kills\", \"Total Assists\", \"Total Deaths\", \"Total Gold\", \n    \"Gold / Min\", \"Total Damage\", \"Damage / Min\", \"Red Buff\", \n    \"Blue Buff\", \"Lord Kill\", \"Tortoise Kill\", \"Tower Destroy\" \n];\n\n// --- New Tracking Variables ---\nlet team1MatchWins = 0; \nlet team2MatchWins = 0; \n// Use dynamic keys for the final match result\nlet finalMatchResult = { [PRIMARY_TEAM]: '', [SECONDARY_TEAM]: '' };\n\n\n// --- 6. Helper Functions ---\nconst outputItems = [];\n\n/**\n * Checks win counters to determine the overall match result (first to 2 wins).\n */\nfunction setMatchResult(currentTeam1Wins, currentTeam2Wins) {\n    if (currentTeam1Wins === 2) {\n        finalMatchResult = { [PRIMARY_TEAM]: 'W', [SECONDARY_TEAM]: 'L' };\n    } else if (currentTeam2Wins === 2) {\n        finalMatchResult = { [PRIMARY_TEAM]: 'L', [SECONDARY_TEAM]: 'W' };\n    }\n}\n\n/**\n * Transforms an array of 12 stat values into a single wide object (one row).\n * @param {Array} teamValues - Array of 12 stat values.\n * @param {boolean} isPrimaryTeam - True if data belongs to the team mapped to team1Values.\n * @param {number} gameNumber - The current game number (1, 2, or 3).\n */\nfunction transformGameData(teamValues, isPrimaryTeam, gameNumber) {\n    if (teamValues.length === 0) {\n        return; \n    }\n\n    const teamName = isPrimaryTeam ? PRIMARY_TEAM : SECONDARY_TEAM;\n    const opponentName = isPrimaryTeam ? SECONDARY_TEAM : PRIMARY_TEAM;\n    \n    // Determine Win/Loss using the Lose_Team array\n    const losingTeam = loseTeamArray[gameNumber - 1];\n    const winLoss = (teamName === losingTeam) ? 'L' : 'W';\n    \n    // --- Win Counting Logic ---\n    let currentTeam1Wins = team1MatchWins;\n    let currentTeam2Wins = team2MatchWins;\n    \n    if (winLoss === 'W') {\n        if (isPrimaryTeam) {\n            currentTeam1Wins++;\n        } else {\n            currentTeam2Wins++;\n        }\n    }\n    \n    // Check for match end condition (first to 2 wins) and update the global tracker\n    setMatchResult(currentTeam1Wins, currentTeam2Wins);\n    \n    // Update global win counters for the next game check\n    team1MatchWins = currentTeam1Wins;\n    team2MatchWins = currentTeam2Wins;\n\n    // --- Object Construction ---\n    let newObject = {};\n    \n    newObject[\"Match_Date\"] = formattedDate;\n    newObject[\"Game_Number\"] = gameNumber;\n    newObject[\"Team_Name\"] = teamName;\n    newObject[\"Opponent_Name\"] = opponentName;\n    newObject[\"Win_Lose\"] = winLoss; // Individual game W/L\n    \n    // --- Conditional Match Result Insertion (FIXED LOGIC) ---\n    // The match result is inserted IF:\n    // 1. The match has been decided (finalMatchResult is set).\n    // 2. The current game is the final game played (gameNumber equals the total wins).\n    const totalGamesPlayed = team1MatchWins + team2MatchWins;\n    const matchDecided = finalMatchResult[PRIMARY_TEAM] !== '';\n    \n    if (matchDecided && (gameNumber === totalGamesPlayed)) {\n        newObject[\"Match Win/Lose\"] = finalMatchResult[teamName]; \n    } else {\n        newObject[\"Match Win/Lose\"] = ''; // Keep it blank for non-deciding games\n    }\n\n    // Loop through the values and create STAT NAME columns\n    for (let i = 0; i < teamValues.length; i++) {\n        const statName = STAT_NAMES[i];\n        const statValue = teamValues[i];\n        \n        newObject[statName] = statValue;\n    }\n    \n    outputItems.push({ json: newObject });\n}\n\n\n// --- 7. Execute Transformation for All Games/Teams ---\n\n// Game 1\ntransformGameData(game1_team1, true, 1); // Team 1 (PRIMARY_TEAM)\ntransformGameData(game1_team2, false, 1); // Team 2 (SECONDARY_TEAM)\n\n// Game 2\n// Only run if the match wasn't decided in Game 1\nif (finalMatchResult[PRIMARY_TEAM] === '') {\n    transformGameData(game2_team1, true, 2);\n    transformGameData(game2_team2, false, 2);\n}\n\n// Game 3\n// Only run if the match wasn't decided in Game 2\n// Note: team1MatchWins + team2MatchWins === 2 check is redundant here because\n// the IF condition above prevents this from running if the match was 2-0 after Game 2.\nif (finalMatchResult[PRIMARY_TEAM] === '') {\n    transformGameData(game3_team1, true, 3);\n    transformGameData(game3_team2, false, 3);\n}\n\n\n// --- 8. Output Final Structured Data ---\nreturn outputItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        432,
+        32
+      ],
+      "id": "d7fb9627-e23f-4b9e-8366-444fb4bd7156",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "Team1_Value",
+              "cssSelector": "div.stats-num h5[style*=\"text-align: left\"]",
+              "returnArray": true
+            },
+            {
+              "key": "Stat_Category",
+              "cssSelector": "div.stats-divider h5",
+              "returnArray": true
+            },
+            {
+              "key": "Team2_Value",
+              "cssSelector": "div.stats-num h5[style*=\"text-align: right\"]",
+              "returnArray": true
+            },
+            {
+              "key": "Date_Value",
+              "cssSelector": "meta[property=\"og:url\"]",
+              "returnValue": "attribute"
+            },
+            {
+              "key": "Lose_Team",
+              "cssSelector": "h3[style=\"text-align: right\"]",
+              "returnArray": true
+            },
+            {
+              "key": "Win_Team",
+              "cssSelector": "div.col-sm-8 h3.mb-0.mt-1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        272,
+        32
+      ],
+      "id": "cf42f63d-6b9f-47de-b258-2df24b84d960",
+      "name": "HTML"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1_JjzBsnF_J59HvvdMF4PvAZNPa4woUR6M_R7ET4GwMo",
+          "mode": "list",
+          "cachedResultName": "MPL PH",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_JjzBsnF_J59HvvdMF4PvAZNPa4woUR6M_R7ET4GwMo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_JjzBsnF_J59HvvdMF4PvAZNPa4woUR6M_R7ET4GwMo/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Match Date": "={{ $json.Match_Date }}",
+            "Game No.": "={{ $json.Game_Number }}",
+            "Team Name": "={{ $json.Team_Name }}",
+            "Opponent Name": "={{ $json.Opponent_Name }}",
+            "Total Kills": "={{ $json['Total Kills'] }}",
+            "Total Assists": "={{ $json['Total Assists'] }}",
+            "Total Deaths": "={{ $json['Total Deaths'] }}",
+            "Total Gold": "={{ $json['Total Gold'] }}",
+            "Gold/Min": "={{ $json['Gold / Min'] }}",
+            "Total Damage": "={{ $json['Total Damage'] }}",
+            "Damage/Min": "={{ $json['Damage / Min'] }}",
+            "Red Buff": "={{ $json['Red Buff'] }}",
+            "Blue Buff": "={{ $json['Blue Buff'] }}",
+            "Lord Kill": "={{ $json['Lord Kill'] }}",
+            "Turtle Kill": "={{ $json['Tortoise Kill'] }}",
+            "Tower Destroy": "={{ $json['Tower Destroy'] }}",
+            "Win/Lose": "={{ $json.Win_Lose }}",
+            "Match Win/Lose": "={{ $json['Match Win/Lose'] }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Match Date",
+              "displayName": "Match Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Game No.",
+              "displayName": "Game No.",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Team Name",
+              "displayName": "Team Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Opponent Name",
+              "displayName": "Opponent Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Win/Lose",
+              "displayName": "Win/Lose",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Match Win/Lose",
+              "displayName": "Match Win/Lose",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Side",
+              "displayName": "Side",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Kills",
+              "displayName": "Total Kills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Assists",
+              "displayName": "Total Assists",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Deaths",
+              "displayName": "Total Deaths",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Gold",
+              "displayName": "Total Gold",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Gold/Min",
+              "displayName": "Gold/Min",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Damage",
+              "displayName": "Total Damage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Damage/Min",
+              "displayName": "Damage/Min",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Red Buff",
+              "displayName": "Red Buff",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Blue Buff",
+              "displayName": "Blue Buff",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Lord Kill",
+              "displayName": "Lord Kill",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Turtle Kill",
+              "displayName": "Turtle Kill",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tower Destroy",
+              "displayName": "Tower Destroy",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        592,
+        32
+      ],
+      "id": "9841780d-a242-4c03-9a12-b528c9f965fa",
+      "name": "Append row in sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "lvTuQhFQAKNQ71pw",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://ph-mpl.com/schedule",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -48,
+        -208
+      ],
+      "id": "f5313300-405f-48bd-8e45-27c1884d9e1b",
+      "name": "HTTP Request1"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "Links",
+              "cssSelector": "a.button.button-mini.button-match-data",
+              "returnValue": "attribute",
+              "attribute": "href",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        160,
+        -208
+      ],
+      "id": "2ff5eeef-f14f-474f-9e8e-f66e99f4e4d9",
+      "name": "HTML1"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "Links",
+        "include": "allOtherFields",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        368,
+        -208
+      ],
+      "id": "6d23586d-4170-4792-bc4d-93028f0a2925",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Code in JavaScript1 (The URL Fixer) ---\n\nconst inputItems = $input.all();\nlet outputItems = []; // Use 'let' so we can reassign later\nconst totalItems = inputItems.length; // Expected: 128\n\n// --- 2. Process ALL Items (0 to 127) and filter out unwanted links ---\nfor (let i = 0; i < totalItems; i++) {\n    const item = inputItems[i];\n    \n    // Skip the range from index 56 up to and including index 63\n    const skipRange56To63 = (i >= 56 && i <= 63);\n    \n    // Skip the range from index 120 through the end (127)\n    const skipRange120ToEnd = (i >= 120);\n\n    // Check if the current item index matches any exclusion criteria\n    if (skipRange56To63 || skipRange120ToEnd) {\n        continue;\n    }\n\n    const url = item.json.Links; \n\n    if (url && typeof url === 'string') {\n        let fixedUrl = url;\n\n        if (!fixedUrl.startsWith('http://') && !fixedUrl.startsWith('https://')) {\n            fixedUrl = 'https://' + fixedUrl.replace(/^\\/\\//, '');\n        }\n\n        outputItems.push({\n            json: {\n                // The fixed URL is output as 'fullUrl'\n                fullUrl: fixedUrl\n            }\n        });\n    }\n}\n\n\n// To be safe, let's find the correct slice index:\nlet sliceIndex = 0;\nfor (let i = 0; i < 62; i++) { // Count how many items from input 0-61 made it to the output\n    if (i < 56) { // Items 0-55 were NOT skipped by the internal filter\n        sliceIndex++;\n    }\n}\n\n// Slice the array to keep only the items starting from the one corresponding to input index 64.\n// If 56 items were output before the 56-63 skip, we slice off 56 items.\n// Assuming your original code had 56 processed items before index 56.\nconst startIndex = 56;\noutputItems = outputItems.slice(startIndex);\n\n\n// THIS IS THE CRUCIAL LINE: It returns the new, shorter array\nreturn outputItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        576,
+        -208
+      ],
+      "id": "a4884c8d-73c4-41cd-9fad-b1240630c61e",
+      "name": "Code in JavaScript1"
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        96,
+        32
+      ],
+      "id": "99be0b31-7a99-4f47-a809-3bd5978e3158",
+      "name": "Wait",
+      "webhookId": "c9216ed3-0452-430a-8169-24036a4f893a"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Code in JavaScript1 (The URL Fixer) ---\n\n\n\nconst inputItems = $input.all();\n\nconst outputItems = [];\n\nconst totalItems = inputItems.length; // e.g., 128\n\n\n\n// --- 2. Process Items, Skipping Index 63 and the Range 120-127 ---\n\nfor (let i = 0; i < totalItems; i++) {\n\n    const item = inputItems[i];\n\n    \n\n    // Check if the current item index is 63 OR if it is in the range 120 through the end (127).\n\n    if (i === 63 || i >= 120) {\n\n        // Skip this item if it matches either exclusion criteria\n\n        continue;\n\n    }\n\n\n\n    const url = item.json.Links; // Input from Split Out\n\n\n\n    if (url && typeof url === 'string') {\n\n        let fixedUrl = url;\n\n\n\n        // Ensure the URL starts with https://\n\n        if (!fixedUrl.startsWith('http://') && !fixedUrl.startsWith('https://')) {\n\n            // Prepend 'https://' to fix the URL\n\n            fixedUrl = 'https://' + fixedUrl.replace(/^\\/\\//, '');\n\n        }\n\n\n\n        outputItems.push({\n\n            json: {\n\n                // The fixed URL is output as 'fullUrl'\n\n                fullUrl: fixedUrl\n\n            }\n\n        });\n\n    }\n\n}\n\n\n\nreturn outputItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        688,
+        800
+      ],
+      "id": "b750d3f6-1f69-446c-944d-c3314b953cad",
+      "name": "Code in JavaScript2"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        784,
+        -208
+      ],
+      "id": "060a0a08-4bcb-46e5-a81c-40de7942af02",
+      "name": "Loop Over Items"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "When clicking ‘Execute workflow’": {
+      "main": [
+        [
+          {
+            "node": "HTTP Request1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTTP Request1": {
+      "main": [
+        [
+          {
+            "node": "HTML1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML1": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code in JavaScript1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "HTTP Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "1e20e1b9-0672-4e1b-b525-f3186f8d4611",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "cf458caff3f517571fdc2cde9686bb0625cac1d95ee7c600f588eb5b5decc7a0"
+  },
+  "id": "CzDkZ9xCaKyfvf87",
+  "tags": []
+}
