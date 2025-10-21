@@ -1,43 +1,16 @@
 {
-  "name": "MPL PH Scrape Data",
+  "name": "MPL PH Scrape Data (Oct 18 at 01:11:36)",
   "nodes": [
     {
       "parameters": {},
       "type": "n8n-nodes-base.manualTrigger",
       "typeVersion": 1,
       "position": [
-        -256,
-        -208
+        1664,
+        -240
       ],
       "id": "b9d62ae4-e365-4247-a107-9db47145b409",
       "name": "When clicking ‘Execute workflow’"
-    },
-    {
-      "parameters": {
-        "url": "={{ $json.fullUrl }}",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        -80,
-        32
-      ],
-      "id": "bdecfe55-29f6-4d59-ac08-574f8edf9867",
-      "name": "HTTP Request"
-    },
-    {
-      "parameters": {
-        "jsCode": "// --- 1. Get Input Data ---\n// Assuming $input.all()[0] contains all the extracted HTML data for a single match (1 link)\nconst inputItem = $input.all()[0].json;\n\nconst team1Values = inputItem.Team1_Value; \nconst team2Values = inputItem.Team2_Value; \nconst loseTeamArray = inputItem.Lose_Team || []; \nconst winTeamName = inputItem.Win_Team; // Assumed winner of Game 1 (single string)\nconst urlContent = inputItem.Date_Value?.content || ''; \n\n// --- 2. Determine Dynamic Team Names ---\n\n// 1. Collect all known team names from the input\nlet teamNames = [];\nif (winTeamName) {\n    teamNames.push(winTeamName);\n}\n// 2. Add all team names from the Lose_Team array\nteamNames = teamNames.concat(loseTeamArray);\n\n// 3. Filter to get the two unique team names\nconst UNIQUE_TEAM_NAMES = teamNames.filter(name => name).filter((v, i, a) => a.indexOf(v) === i);\n\n// Assign them dynamically. PRIMARY_TEAM will be the team associated with team1Values.\nconst PRIMARY_TEAM = UNIQUE_TEAM_NAMES[0] || 'Team_A';\nconst SECONDARY_TEAM = UNIQUE_TEAM_NAMES[1] || 'Team_B';\n\n// --- 3. Extract and Format Date ---\nconst dateMatch = urlContent.match(/(\\d{8})$/); \nlet formattedDate = 'Date Not Found';\n\nif (dateMatch && dateMatch[1]) {\n    const dateString = dateMatch[1];\n    formattedDate = `${dateString.substring(0, 4)}-${dateString.substring(4, 6)}-${dateString.substring(6, 8)}`;\n}\n\n// --- 4. Filter Arrays for Games ---\nconst GAME_LENGTH = 12; // 12 stats per game\n\n// Game 1: Index 0 to 11\nconst game1_team1 = team1Values ? team1Values.slice(0, GAME_LENGTH) : [];\nconst game1_team2 = team2Values ? team2Values.slice(0, GAME_LENGTH) : [];\n\n// Game 2: Index 12 to 23\nconst game2_team1 = team1Values ? team1Values.slice(GAME_LENGTH, GAME_LENGTH * 2) : [];\nconst game2_team2 = team2Values ? team2Values.slice(GAME_LENGTH, GAME_LENGTH * 2) : [];\n\n// Game 3: Index 24 to 35\nconst game3_team1 = team1Values ? team1Values.slice(GAME_LENGTH * 2, GAME_LENGTH * 3) : [];\nconst game3_team2 = team2Values ? team2Values.slice(GAME_LENGTH * 2, GAME_LENGTH * 3) : [];\n\n\n// --- 5. Define Stat Categories ---\nconst STAT_NAMES = [\n    \"Total Kills\", \"Total Assists\", \"Total Deaths\", \"Total Gold\", \n    \"Gold / Min\", \"Total Damage\", \"Damage / Min\", \"Red Buff\", \n    \"Blue Buff\", \"Lord Kill\", \"Tortoise Kill\", \"Tower Destroy\" \n];\n\n// --- New Tracking Variables ---\nlet team1MatchWins = 0; \nlet team2MatchWins = 0; \n// Use dynamic keys for the final match result\nlet finalMatchResult = { [PRIMARY_TEAM]: '', [SECONDARY_TEAM]: '' };\n\n\n// --- 6. Helper Functions ---\nconst outputItems = [];\n\n/**\n * Checks win counters to determine the overall match result (first to 2 wins).\n */\nfunction setMatchResult(currentTeam1Wins, currentTeam2Wins) {\n    if (currentTeam1Wins === 2) {\n        finalMatchResult = { [PRIMARY_TEAM]: 'W', [SECONDARY_TEAM]: 'L' };\n    } else if (currentTeam2Wins === 2) {\n        finalMatchResult = { [PRIMARY_TEAM]: 'L', [SECONDARY_TEAM]: 'W' };\n    }\n}\n\n/**\n * Transforms an array of 12 stat values into a single wide object (one row).\n * @param {Array} teamValues - Array of 12 stat values.\n * @param {boolean} isPrimaryTeam - True if data belongs to the team mapped to team1Values.\n * @param {number} gameNumber - The current game number (1, 2, or 3).\n */\nfunction transformGameData(teamValues, isPrimaryTeam, gameNumber) {\n    if (teamValues.length === 0) {\n        return; \n    }\n\n    const teamName = isPrimaryTeam ? PRIMARY_TEAM : SECONDARY_TEAM;\n    const opponentName = isPrimaryTeam ? SECONDARY_TEAM : PRIMARY_TEAM;\n    \n    // Determine Win/Loss using the Lose_Team array\n    const losingTeam = loseTeamArray[gameNumber - 1];\n    const winLoss = (teamName === losingTeam) ? 'L' : 'W';\n    \n    // --- Win Counting Logic ---\n    let currentTeam1Wins = team1MatchWins;\n    let currentTeam2Wins = team2MatchWins;\n    \n    if (winLoss === 'W') {\n        if (isPrimaryTeam) {\n            currentTeam1Wins++;\n        } else {\n            currentTeam2Wins++;\n        }\n    }\n    \n    // Check for match end condition (first to 2 wins) and update the global tracker\n    setMatchResult(currentTeam1Wins, currentTeam2Wins);\n    \n    // Update global win counters for the next game check\n    team1MatchWins = currentTeam1Wins;\n    team2MatchWins = currentTeam2Wins;\n\n    // --- Object Construction ---\n    let newObject = {};\n    \n    newObject[\"Match_Date\"] = formattedDate;\n    newObject[\"Game_Number\"] = gameNumber;\n    newObject[\"Team_Name\"] = teamName;\n    newObject[\"Opponent_Name\"] = opponentName;\n    newObject[\"Win_Lose\"] = winLoss; // Individual game W/L\n    \n    // --- Conditional Match Result Insertion (FIXED LOGIC) ---\n    // The match result is inserted IF:\n    // 1. The match has been decided (finalMatchResult is set).\n    // 2. The current game is the final game played (gameNumber equals the total wins).\n    const totalGamesPlayed = team1MatchWins + team2MatchWins;\n    const matchDecided = finalMatchResult[PRIMARY_TEAM] !== '';\n    \n    if (matchDecided && (gameNumber === totalGamesPlayed)) {\n        newObject[\"Match Win/Lose\"] = finalMatchResult[teamName]; \n    } else {\n        newObject[\"Match Win/Lose\"] = ''; // Keep it blank for non-deciding games\n    }\n\n    // Loop through the values and create STAT NAME columns\n    for (let i = 0; i < teamValues.length; i++) {\n        const statName = STAT_NAMES[i];\n        const statValue = teamValues[i];\n        \n        newObject[statName] = statValue;\n    }\n    \n    outputItems.push({ json: newObject });\n}\n\n\n// --- 7. Execute Transformation for All Games/Teams ---\n\n// Game 1\ntransformGameData(game1_team1, true, 1); // Team 1 (PRIMARY_TEAM)\ntransformGameData(game1_team2, false, 1); // Team 2 (SECONDARY_TEAM)\n\n// Game 2\n// Only run if the match wasn't decided in Game 1\nif (finalMatchResult[PRIMARY_TEAM] === '') {\n    transformGameData(game2_team1, true, 2);\n    transformGameData(game2_team2, false, 2);\n}\n\n// Game 3\n// Only run if the match wasn't decided in Game 2\n// Note: team1MatchWins + team2MatchWins === 2 check is redundant here because\n// the IF condition above prevents this from running if the match was 2-0 after Game 2.\nif (finalMatchResult[PRIMARY_TEAM] === '') {\n    transformGameData(game3_team1, true, 3);\n    transformGameData(game3_team2, false, 3);\n}\n\n\n// --- 8. Output Final Structured Data ---\nreturn outputItems;"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        432,
-        32
-      ],
-      "id": "d7fb9627-e23f-4b9e-8366-444fb4bd7156",
-      "name": "Code in JavaScript"
     },
     {
       "parameters": {
@@ -80,7 +53,7 @@
       "type": "n8n-nodes-base.html",
       "typeVersion": 1.2,
       "position": [
-        272,
+        96,
         32
       ],
       "id": "cf42f63d-6b9f-47de-b258-2df24b84d960",
@@ -326,8 +299,8 @@
       "type": "n8n-nodes-base.googleSheets",
       "typeVersion": 4.7,
       "position": [
-        592,
-        32
+        896,
+        16
       ],
       "id": "9841780d-a242-4c03-9a12-b528c9f965fa",
       "name": "Append row in sheet",
@@ -340,79 +313,12 @@
     },
     {
       "parameters": {
-        "url": "https://ph-mpl.com/schedule",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.httpRequest",
-      "typeVersion": 4.2,
-      "position": [
-        -48,
-        -208
-      ],
-      "id": "f5313300-405f-48bd-8e45-27c1884d9e1b",
-      "name": "HTTP Request1"
-    },
-    {
-      "parameters": {
-        "operation": "extractHtmlContent",
-        "extractionValues": {
-          "values": [
-            {
-              "key": "Links",
-              "cssSelector": "a.button.button-mini.button-match-data",
-              "returnValue": "attribute",
-              "attribute": "href",
-              "returnArray": true
-            }
-          ]
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.html",
-      "typeVersion": 1.2,
-      "position": [
-        160,
-        -208
-      ],
-      "id": "2ff5eeef-f14f-474f-9e8e-f66e99f4e4d9",
-      "name": "HTML1"
-    },
-    {
-      "parameters": {
-        "fieldToSplitOut": "Links",
-        "include": "allOtherFields",
-        "options": {}
-      },
-      "type": "n8n-nodes-base.splitOut",
-      "typeVersion": 1,
-      "position": [
-        368,
-        -208
-      ],
-      "id": "6d23586d-4170-4792-bc4d-93028f0a2925",
-      "name": "Split Out"
-    },
-    {
-      "parameters": {
-        "jsCode": "// --- Code in JavaScript1 (The URL Fixer) ---\n\nconst inputItems = $input.all();\nlet outputItems = []; // Use 'let' so we can reassign later\nconst totalItems = inputItems.length; // Expected: 128\n\n// --- 2. Process ALL Items (0 to 127) and filter out unwanted links ---\nfor (let i = 0; i < totalItems; i++) {\n    const item = inputItems[i];\n    \n    // Skip the range from index 56 up to and including index 63\n    const skipRange56To63 = (i >= 56 && i <= 63);\n    \n    // Skip the range from index 120 through the end (127)\n    const skipRange120ToEnd = (i >= 120);\n\n    // Check if the current item index matches any exclusion criteria\n    if (skipRange56To63 || skipRange120ToEnd) {\n        continue;\n    }\n\n    const url = item.json.Links; \n\n    if (url && typeof url === 'string') {\n        let fixedUrl = url;\n\n        if (!fixedUrl.startsWith('http://') && !fixedUrl.startsWith('https://')) {\n            fixedUrl = 'https://' + fixedUrl.replace(/^\\/\\//, '');\n        }\n\n        outputItems.push({\n            json: {\n                // The fixed URL is output as 'fullUrl'\n                fullUrl: fixedUrl\n            }\n        });\n    }\n}\n\n\n// To be safe, let's find the correct slice index:\nlet sliceIndex = 0;\nfor (let i = 0; i < 62; i++) { // Count how many items from input 0-61 made it to the output\n    if (i < 56) { // Items 0-55 were NOT skipped by the internal filter\n        sliceIndex++;\n    }\n}\n\n// Slice the array to keep only the items starting from the one corresponding to input index 64.\n// If 56 items were output before the 56-63 skip, we slice off 56 items.\n// Assuming your original code had 56 processed items before index 56.\nconst startIndex = 56;\noutputItems = outputItems.slice(startIndex);\n\n\n// THIS IS THE CRUCIAL LINE: It returns the new, shorter array\nreturn outputItems;"
-      },
-      "type": "n8n-nodes-base.code",
-      "typeVersion": 2,
-      "position": [
-        576,
-        -208
-      ],
-      "id": "a4884c8d-73c4-41cd-9fad-b1240630c61e",
-      "name": "Code in JavaScript1"
-    },
-    {
-      "parameters": {
         "amount": 1
       },
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        96,
+        -80,
         32
       ],
       "id": "99be0b31-7a99-4f47-a809-3bd5978e3158",
@@ -439,11 +345,1249 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        784,
-        -208
+        672,
+        -288
       ],
       "id": "060a0a08-4bcb-46e5-a81c-40de7942af02",
       "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "Teams",
+              "cssSelector": "span.name.visible-xs > a",
+              "returnArray": true
+            },
+            {
+              "key": "Match_Win",
+              "cssSelector": ".match-info-header-scoreholder-score",
+              "returnArray": true
+            },
+            {
+              "key": "MatchWinLose",
+              "cssSelector": "div.brkts-popup-spaced.brkts-popup-winloss-icon i",
+              "returnValue": "attribute",
+              "attribute": "class",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        -112,
+        -400
+      ],
+      "id": "72c91c35-6d15-4612-89bf-49e302e39e52",
+      "name": "HTML2"
+    },
+    {
+      "parameters": {
+        "url": "https://ph-mpl.com/schedule",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -320,
+        -240
+      ],
+      "id": "f5313300-405f-48bd-8e45-27c1884d9e1b",
+      "name": "MPL PH Website"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "Links",
+              "cssSelector": "a.button.button-mini.button-match-data",
+              "returnValue": "attribute",
+              "attribute": "href",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        -112,
+        -240
+      ],
+      "id": "2ff5eeef-f14f-474f-9e8e-f66e99f4e4d9",
+      "name": "MPL PH per Game Link"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.fullUrl }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -256,
+        32
+      ],
+      "id": "bdecfe55-29f6-4d59-ac08-574f8edf9867",
+      "name": "MPL PH per Game Link (in Array)"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- 1. Get Input Data ---\n// Assuming $input.all()[0] contains all the extracted HTML data for a single match (1 link)\nconst inputItem = $input.all()[0].json;\n\nconst team1Values = inputItem.Team1_Value; \nconst team2Values = inputItem.Team2_Value; \nconst loseTeamArray = inputItem.Lose_Team || []; \nconst winTeamName = inputItem.Win_Team; // Assumed winner of Game 1 (single string)\nconst urlContent = inputItem.Date_Value?.content || ''; \n\n// --- 2. Determine Dynamic Team Names ---\n\n// 1. Collect all known team names from the input\nlet teamNames = [];\nif (winTeamName) {\n    teamNames.push(winTeamName);\n}\n// 2. Add all team names from the Lose_Team array\nteamNames = teamNames.concat(loseTeamArray);\n\n// 3. Filter to get the two unique team names\nconst UNIQUE_TEAM_NAMES = teamNames.filter(name => name).filter((v, i, a) => a.indexOf(v) === i);\n\n// Assign them dynamically. PRIMARY_TEAM will be the team associated with team1Values.\nconst PRIMARY_TEAM = UNIQUE_TEAM_NAMES[0] || 'Team_A';\nconst SECONDARY_TEAM = UNIQUE_TEAM_NAMES[1] || 'Team_B';\n\n// --- 3. Extract and Format Date ---\nconst dateMatch = urlContent.match(/(\\d{8})$/); \nlet formattedDate = 'Date Not Found';\n\nif (dateMatch && dateMatch[1]) {\n    const dateString = dateMatch[1];\n    formattedDate = `${dateString.substring(0, 4)}-${dateString.substring(4, 6)}-${dateString.substring(6, 8)}`;\n}\n\n// --- 4. Filter Arrays for Games ---\nconst GAME_LENGTH = 12; // 12 stats per game\n\n// Game 1: Index 0 to 11\nconst game1_team1 = team1Values ? team1Values.slice(0, GAME_LENGTH) : [];\nconst game1_team2 = team2Values ? team2Values.slice(0, GAME_LENGTH) : [];\n\n// Game 2: Index 12 to 23\nconst game2_team1 = team1Values ? team1Values.slice(GAME_LENGTH, GAME_LENGTH * 2) : [];\nconst game2_team2 = team2Values ? team2Values.slice(GAME_LENGTH, GAME_LENGTH * 2) : [];\n\n// Game 3: Index 24 to 35\nconst game3_team1 = team1Values ? team1Values.slice(GAME_LENGTH * 2, GAME_LENGTH * 3) : [];\nconst game3_team2 = team2Values ? team2Values.slice(GAME_LENGTH * 2, GAME_LENGTH * 3) : [];\n\n\n// --- 5. Define Stat Categories ---\nconst STAT_NAMES = [\n    \"Total Kills\", \"Total Assists\", \"Total Deaths\", \"Total Gold\", \n    \"Gold / Min\", \"Total Damage\", \"Damage / Min\", \"Red Buff\", \n    \"Blue Buff\", \"Lord Kill\", \"Tortoise Kill\", \"Tower Destroy\" \n];\n\n// --- New Tracking Variables ---\nlet team1MatchWins = 0; \nlet team2MatchWins = 0; \n// Use dynamic keys for the final match result\nlet finalMatchResult = { [PRIMARY_TEAM]: '', [SECONDARY_TEAM]: '' };\n\n\n// --- 6. Helper Functions ---\nconst outputItems = [];\n\n/**\n * Checks win counters to determine the overall match result (first to 2 wins).\n */\nfunction setMatchResult(currentTeam1Wins, currentTeam2Wins) {\n    if (currentTeam1Wins === 2) {\n        finalMatchResult = { [PRIMARY_TEAM]: 'W', [SECONDARY_TEAM]: 'L' };\n    } else if (currentTeam2Wins === 2) {\n        finalMatchResult = { [PRIMARY_TEAM]: 'L', [SECONDARY_TEAM]: 'W' };\n    }\n}\n\n/**\n * Transforms an array of 12 stat values into a single wide object (one row).\n * @param {Array} teamValues - Array of 12 stat values.\n * @param {boolean} isPrimaryTeam - True if data belongs to the team mapped to team1Values.\n * @param {number} gameNumber - The current game number (1, 2, or 3).\n */\nfunction transformGameData(teamValues, isPrimaryTeam, gameNumber) {\n    if (teamValues.length === 0) {\n        return; \n    }\n\n    const teamName = isPrimaryTeam ? PRIMARY_TEAM : SECONDARY_TEAM;\n    const opponentName = isPrimaryTeam ? SECONDARY_TEAM : PRIMARY_TEAM;\n    \n    // Determine Win/Loss using the Lose_Team array\n    const losingTeam = loseTeamArray[gameNumber - 1];\n    const winLoss = (teamName === losingTeam) ? 'L' : 'W';\n    \n    // --- Win Counting Logic ---\n    let currentTeam1Wins = team1MatchWins;\n    let currentTeam2Wins = team2MatchWins;\n    \n    if (winLoss === 'W') {\n        if (isPrimaryTeam) {\n            currentTeam1Wins++;\n        } else {\n            currentTeam2Wins++;\n        }\n    }\n    \n    // Check for match end condition (first to 2 wins) and update the global tracker\n    setMatchResult(currentTeam1Wins, currentTeam2Wins);\n    \n    // Update global win counters for the next game check\n    team1MatchWins = currentTeam1Wins;\n    team2MatchWins = currentTeam2Wins;\n\n    // --- Object Construction ---\n    let newObject = {};\n    \n    newObject[\"Match_Date\"] = formattedDate;\n    newObject[\"Game_Number\"] = gameNumber;\n    newObject[\"Team_Name\"] = teamName;\n    newObject[\"Opponent_Name\"] = opponentName;\n    newObject[\"Win_Lose\"] = winLoss; // Individual game W/L\n    \n    // --- Conditional Match Result Insertion (FIXED LOGIC) ---\n    // The match result is inserted IF:\n    // 1. The match has been decided (finalMatchResult is set).\n    // 2. The current game is the final game played (gameNumber equals the total wins).\n    const totalGamesPlayed = team1MatchWins + team2MatchWins;\n    const matchDecided = finalMatchResult[PRIMARY_TEAM] !== '';\n    \n    if (matchDecided && (gameNumber === totalGamesPlayed)) {\n        newObject[\"Match Win/Lose\"] = finalMatchResult[teamName]; \n    } else {\n        newObject[\"Match Win/Lose\"] = ''; // Keep it blank for non-deciding games\n    }\n\n    // Loop through the values and create STAT NAME columns\n    for (let i = 0; i < teamValues.length; i++) {\n        const statName = STAT_NAMES[i];\n        const statValue = teamValues[i];\n        \n        newObject[statName] = statValue;\n    }\n    \n    outputItems.push({ json: newObject });\n}\n\n\n// --- 7. Execute Transformation for All Games/Teams ---\n\n// Game 1\ntransformGameData(game1_team1, true, 1); // Team 1 (PRIMARY_TEAM)\ntransformGameData(game1_team2, false, 1); // Team 2 (SECONDARY_TEAM)\n\n// Game 2\n// Only run if the match wasn't decided in Game 1\nif (finalMatchResult[PRIMARY_TEAM] === '') {\n    transformGameData(game2_team1, true, 2);\n    transformGameData(game2_team2, false, 2);\n}\n\n// Game 3\n// Only run if the match wasn't decided in Game 2\n// Note: team1MatchWins + team2MatchWins === 2 check is redundant here because\n// the IF condition above prevents this from running if the match was 2-0 after Game 2.\nif (finalMatchResult[PRIMARY_TEAM] === '') {\n    transformGameData(game3_team1, true, 3);\n    transformGameData(game3_team2, false, 3);\n}\n\n\n// --- 8. Output Final Structured Data ---\nreturn outputItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1136,
+        480
+      ],
+      "id": "b0146612-6217-4c35-9143-1862c3517eff",
+      "name": "Code in JavaScript3"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- 1. Get Input Data ---\n// Assuming $input.all()[0] contains all the extracted HTML data for a single match (1 link)\nconst inputItem = $input.all()[0].json;\n\n// --- NEW: Get data from the 'Merge' step ---\n// Assuming the 'Merge' step data is in $input.all()[1].json\n// You may need to adjust the index ([1]) based on your workflow's exact input structure.\nconst mergeData = $input.all()[1].json;\n\nconst TEAM1_SCORE = mergeData.Team1_Score;\nconst TEAM2_SCORE = mergeData.Team2_Score;\nconst GAME_WL = [\n    null, // Index 0 unused, games start at 1\n    mergeData.Game1_WL,\n    mergeData.Game2_WL,\n    mergeData.Game3_WL\n];\n// --------------------------------------------------\n\nconst team1Values = inputItem.Team1_Value; \nconst team2Values = inputItem.Team2_Value; \nconst loseTeamArray = inputItem.Lose_Team || []; \nconst winTeamName = inputItem.Win_Team; // Assumed winner of Game 1 (single string)\nconst urlContent = inputItem.Date_Value?.content || ''; \n\n// --- 2. Determine Dynamic Team Names ---\n\n// 1. Collect all known team names from the input\nlet teamNames = [];\nif (winTeamName) {\n    teamNames.push(winTeamName);\n}\n// 2. Add all team names from the Lose_Team array\nteamNames = teamNames.concat(loseTeamArray);\n\n// 3. Filter to get the two unique team names\nconst UNIQUE_TEAM_NAMES = teamNames.filter(name => name).filter((v, i, a) => a.indexOf(v) === i);\n\n// Assign them dynamically. PRIMARY_TEAM will be the team associated with team1Values.\nconst PRIMARY_TEAM = UNIQUE_TEAM_NAMES[0] || 'Team_A';\nconst SECONDARY_TEAM = UNIQUE_TEAM_NAMES[1] || 'Team_B';\n\n// --- 3. Extract and Format Date ---\nconst dateMatch = urlContent.match(/(\\d{8})$/); \nlet formattedDate = 'Date Not Found';\n\nif (dateMatch && dateMatch[1]) {\n    const dateString = dateMatch[1];\n    formattedDate = `${dateString.substring(0, 4)}-${dateString.substring(4, 6)}-${dateString.substring(6, 8)}`;\n}\n\n// --- 4. Filter Arrays for Games ---\nconst GAME_LENGTH = 12; // 12 stats per game\n\n// Game 1: Index 0 to 11\nconst game1_team1 = team1Values ? team1Values.slice(0, GAME_LENGTH) : [];\nconst game1_team2 = team2Values ? team2Values.slice(0, GAME_LENGTH) : [];\n\n// Game 2: Index 12 to 23\nconst game2_team1 = team1Values ? team1Values.slice(GAME_LENGTH, GAME_LENGTH * 2) : [];\nconst game2_team2 = team2Values ? team2Values.slice(GAME_LENGTH, GAME_LENGTH * 2) : [];\n\n// Game 3: Index 24 to 35\nconst game3_team1 = team1Values ? team1Values.slice(GAME_LENGTH * 2, GAME_LENGTH * 3) : [];\nconst game3_team2 = team2Values ? team2Values.slice(GAME_LENGTH * 2, GAME_LENGTH * 3) : [];\n\n\n// --- 5. Define Stat Categories ---\nconst STAT_NAMES = [\n    \"Total Kills\", \"Total Assists\", \"Total Deaths\", \"Total Gold\", \n    \"Gold / Min\", \"Total Damage\", \"Damage / Min\", \"Red Buff\", \n    \"Blue Buff\", \"Lord Kill\", \"Tortoise Kill\", \"Tower Destroy\" \n];\n\n// --- New Tracking Variables (Kept for controlling game execution flow) ---\nlet team1MatchWins = 0; \nlet team2MatchWins = 0; \n\n// --- 6. Helper Functions ---\nconst outputItems = [];\n\n/**\n * Checks win counters to determine the overall match result (first to 2 wins).\n * NOTE: finalMatchResult is removed, but we keep the win counting logic\n * to control when games 2 and 3 are executed.\n */\nfunction updateMatchWins(isPrimaryTeam, winLoss) {\n    if (winLoss === 'W') {\n        if (isPrimaryTeam) {\n            team1MatchWins++;\n        } else {\n            team2MatchWins++;\n        }\n    }\n}\n\n/**\n * Transforms an array of 12 stat values into a single wide object (one row).\n * @param {Array} teamValues - Array of 12 stat values.\n * @param {boolean} isPrimaryTeam - True if data belongs to the team mapped to team1Values.\n * @param {number} gameNumber - The current game number (1, 2, or 3).\n * @param {string} gameWL - NEW: The Game W/L string from the Merge step (e.g., '1:0' or '0:1').\n * @param {string} team1MatchScore - NEW: The overall match score for the primary team (e.g., '2').\n * @param {string} team2MatchScore - NEW: The overall match score for the secondary team (e.g., '1').\n */\nfunction transformGameData(teamValues, isPrimaryTeam, gameNumber, gameWL, team1MatchScore, team2MatchScore) {\n    if (teamValues.length === 0) {\n        return; \n    }\n\n    const teamName = isPrimaryTeam ? PRIMARY_TEAM : SECONDARY_TEAM;\n    const opponentName = isPrimaryTeam ? SECONDARY_TEAM : PRIMARY_TEAM;\n    \n    // Determine Win/Loss using the Lose_Team array\n    const losingTeam = loseTeamArray[gameNumber - 1];\n    // NOTE: This Win/Loss is used for flow control and Team_Side mapping.\n    const winLoss = (teamName === losingTeam) ? 'L' : 'W'; \n    \n    // --- Win Counting Logic (Only for game execution flow control) ---\n    updateMatchWins(isPrimaryTeam, winLoss);\n    \n    // --- Map W/L to Blue/Red Side ---\n    // If a team wins (W), they are recorded as the Blue Side.\n    // If a team loses (L), they are recorded as the Red Side.\n    const teamSide = (winLoss === 'W') ? 'Blue' : 'Red';\n\n    // --- Object Construction ---\n    let newObject = {};\n    \n    newObject[\"Match_Date\"] = formattedDate;\n    newObject[\"Game_Number\"] = gameNumber;\n    newObject[\"Team_Name\"] = teamName;\n    newObject[\"Opponent_Name\"] = opponentName;\n    newObject[\"Team_Side\"] = teamSide; \n    \n    // --- NEW FIELDS ---\n    newObject[\"Game_Score_WL\"] = gameWL;\n    newObject[\"Team_Match_Score\"] = team1MatchScore;\n    newObject[\"Opponent_Match_Score\"] = team2MatchScore;\n    // ------------------\n    \n    // Loop through the values and create STAT NAME columns\n    for (let i = 0; i < teamValues.length; i++) {\n        const statName = STAT_NAMES[i];\n        const statValue = teamValues[i];\n        \n        newObject[statName] = statValue;\n    }\n    \n    outputItems.push({ json: newObject });\n}\n\n\n// --- 7. Execute Transformation for All Games/Teams ---\n\n// Game 1\n// Passed: Game 1 W/L, Team 1 Match Score, Team 2 Match Score\ntransformGameData(game1_team1, true, 1, GAME_WL[1], TEAM1_SCORE, TEAM2_SCORE); // Team 1 (PRIMARY_TEAM)\ntransformGameData(game1_team2, false, 1, GAME_WL[1], TEAM2_SCORE, TEAM1_SCORE); // Team 2 (SECONDARY_TEAM)\n\n// Game 2\n// Only run if the match wasn't decided in Game 1 (Wins < 2)\nif (team1MatchWins < 2 && team2MatchWins < 2) {\n    // Passed: Game 2 W/L, Team 1 Match Score, Team 2 Match Score\n    transformGameData(game2_team1, true, 2, GAME_WL[2], TEAM1_SCORE, TEAM2_SCORE);\n    transformGameData(game2_team2, false, 2, GAME_WL[2], TEAM2_SCORE, TEAM1_SCORE);\n}\n\n// Game 3\n// Only run if the match wasn't decided in Game 2 (Wins < 2)\nif (team1MatchWins < 2 && team2MatchWins < 2) {\n    // Passed: Game 3 W/L, Team 1 Match Score, Team 2 Match Score\n    transformGameData(game3_team1, true, 3, GAME_WL[3], TEAM1_SCORE, TEAM2_SCORE);\n    transformGameData(game3_team2, false, 3, GAME_WL[3], TEAM2_SCORE, TEAM1_SCORE);\n}\n\n\n// --- 8. Output Final Structured Data ---\nreturn outputItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        320,
+        32
+      ],
+      "id": "d7fb9627-e23f-4b9e-8366-444fb4bd7156",
+      "name": "Table to Gsheets",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.all();\n// Assuming all necessary data arrays are found under the first input item\nconst inputData = inputItems[0].json;\n\n// Input arrays are assumed to be flat lists: [T1, T2, T3, T4, ...]\nconst teamsInput = inputData.Teams || []; \nconst matchWinInput = inputData.Match_Win || []; \nconst matchWinLoseInput = inputData.MatchWinLose || []; \n\nconst outputItems = [];\n\n// --- Helper function to convert the class string to 1 (win) or 0 (loss) ---\nfunction statusToWin(statusString) {\n    // We check for the unique class that signifies a win\n    if (typeof statusString === 'string' && statusString.includes('forest-green-text')) {\n        return 1;\n    }\n    return 0;\n}\n\n// 1. Index Pre-Calculation (Determine W/L data boundaries for each match)\nconst totalElements = Math.min(teamsInput.length, matchWinInput.length);\nconst totalMatches = Math.floor(totalElements / 2);\n\nlet currentMatchWinLoseIndex = 0;\nlet matchWinLoseIndices = []; // Stores the start index in MatchWinLose for each match\n\nfor (let i = 0; i < totalMatches; i++) {\n    const scoreIndex = i * 2;\n    const team1Score = parseInt(matchWinInput[scoreIndex] || '0', 10);\n    const team2Score = parseInt(matchWinInput[scoreIndex + 1] || '0', 10);\n    const totalGames = team1Score + team2Score;\n    \n    // Each game uses 2 elements (Team 1 Status, Team 2 Status)\n    const elementsUsed = totalGames * 2; \n    \n    matchWinLoseIndices.push(currentMatchWinLoseIndex);\n    currentMatchWinLoseIndex += elementsUsed;\n}\n\n\n// 2. Match Iteration and Transformation\nfor (let i = 0; i < totalMatches; i++) {\n    const index = i * 2;\n    \n    // --- Data Extraction ---\n    const team1Name = teamsInput[index] || '';\n    const team2Name = teamsInput[index + 1] || '';\n    const team1Score = matchWinInput[index] || '0'; \n    const team2Score = matchWinInput[index + 1] || '0'; \n    \n    const team1OverallScoreInt = parseInt(team1Score, 10);\n    const team2OverallScoreInt = parseInt(team2Score, 10);\n    const scoreSum = team1OverallScoreInt + team2OverallScoreInt;\n    \n    // Initialize the game results object. This is the key change.\n    // We default to 'N/A' for all three possible games.\n    let gameResults = {\n        Game1_WL: 'N/A',\n        Game2_WL: 'N/A',\n        Game3_WL: 'N/A'\n    };\n    \n    // 3. Score Check: Only proceed if sum is 2 (2 games) or 3 (3 games)\n    if (scoreSum === 2 || scoreSum === 3) {\n        const gamesToProcess = scoreSum;\n        const startWLIndex = matchWinLoseIndices[i];\n        const results = [];\n        \n        // Mapping of game index to the key in gameResults object\n        const gameKeys = ['Game1_WL', 'Game2_WL', 'Game3_WL'];\n\n        // Process the required number of games (2 or 3)\n        for (let game = 0; game < gamesToProcess; game++) {\n            const wlIndex = startWLIndex + (game * 2);\n            \n            // W/L status strings\n            const t1Status = matchWinLoseInput[wlIndex];\n            const t2Status = matchWinLoseInput[wlIndex + 1];\n            \n            // Convert status to 1/0\n            const t1Win = statusToWin(t1Status);\n            const t2Win = statusToWin(t2Status);\n            \n            // Format Game W/L string: 1:0 (Team 1 won) or 0:1 (Team 2 won)\n            const wlString = `${t1Win}:${t2Win}`;\n            \n            // Assign the result to the corresponding game column key\n            gameResults[gameKeys[game]] = wlString;\n        }\n    }\n\n    // 5. Output Row - Now includes the individual game columns\n    outputItems.push({\n        json: {\n            Team1: team1Name,\n            Team2: team2Name,\n            Team1_Score: team1Score,\n            Team2_Score: team2Score,\n            // New fields for individual game columns\n            Game1_WL: gameResults.Game1_WL, \n            Game2_WL: gameResults.Game2_WL, \n            Game3_WL: gameResults.Game3_WL, \n        }\n    });\n}\n\nreturn outputItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        -400
+      ],
+      "id": "527d63eb-5647-4f5c-8897-04b4370a26f9",
+      "name": "MPL PH Match Wins"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "Team1_Value",
+              "cssSelector": "div.stats-num h5[style*=\"text-align: left\"]",
+              "returnArray": true
+            },
+            {
+              "key": "Stat_Category",
+              "cssSelector": "div.stats-divider h5",
+              "returnArray": true
+            },
+            {
+              "key": "Team2_Value",
+              "cssSelector": "div.stats-num h5[style*=\"text-align: right\"]",
+              "returnArray": true
+            },
+            {
+              "key": "Date_Value",
+              "cssSelector": "meta[property=\"og:url\"]",
+              "returnValue": "attribute"
+            },
+            {
+              "key": "Red_Side",
+              "cssSelector": "h3[style=\"text-align: right\"]",
+              "returnArray": true
+            },
+            {
+              "key": "Blue_Side",
+              "cssSelector": "div.col-sm-8 h3.mb-0.mt-1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        1728,
+        -16
+      ],
+      "id": "ba55dd01-7bf4-4b5f-bf2b-03aa87894db1",
+      "name": "HTML1"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1_JjzBsnF_J59HvvdMF4PvAZNPa4woUR6M_R7ET4GwMo",
+          "mode": "list",
+          "cachedResultName": "MPL PH",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_JjzBsnF_J59HvvdMF4PvAZNPa4woUR6M_R7ET4GwMo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_JjzBsnF_J59HvvdMF4PvAZNPa4woUR6M_R7ET4GwMo/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Match Date": "={{ $json.Match_Date }}",
+            "Game No.": "={{ $json.Game_Number }}",
+            "Team Name": "={{ $json.Team_Name }}",
+            "Opponent Name": "={{ $json.Opponent_Name }}",
+            "Total Kills": "={{ $json['Total Kills'] }}",
+            "Total Assists": "={{ $json['Total Assists'] }}",
+            "Total Deaths": "={{ $json['Total Deaths'] }}",
+            "Total Gold": "={{ $json['Total Gold'] }}",
+            "Gold/Min": "={{ $json['Gold / Min'] }}",
+            "Total Damage": "={{ $json['Total Damage'] }}",
+            "Damage/Min": "={{ $json['Damage / Min'] }}",
+            "Red Buff": "={{ $json['Red Buff'] }}",
+            "Blue Buff": "={{ $json['Blue Buff'] }}",
+            "Lord Kill": "={{ $json['Lord Kill'] }}",
+            "Turtle Kill": "={{ $json['Tortoise Kill'] }}",
+            "Tower Destroy": "={{ $json['Tower Destroy'] }}",
+            "Match Win/Lose": "=",
+            "Status Win": "={{ $json.Win_Status }}",
+            "Team Side": "={{ $json.Team_Side }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Match Date",
+              "displayName": "Match Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Game No.",
+              "displayName": "Game No.",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Team Name",
+              "displayName": "Team Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Opponent Name",
+              "displayName": "Opponent Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Status Win",
+              "displayName": "Status Win",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Match Win/Lose",
+              "displayName": "Match Win/Lose",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Team Side",
+              "displayName": "Team Side",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Kills",
+              "displayName": "Total Kills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Assists",
+              "displayName": "Total Assists",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Deaths",
+              "displayName": "Total Deaths",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Gold",
+              "displayName": "Total Gold",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Gold/Min",
+              "displayName": "Gold/Min",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Damage",
+              "displayName": "Total Damage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Damage/Min",
+              "displayName": "Damage/Min",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Red Buff",
+              "displayName": "Red Buff",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Blue Buff",
+              "displayName": "Blue Buff",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Lord Kill",
+              "displayName": "Lord Kill",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Turtle Kill",
+              "displayName": "Turtle Kill",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tower Destroy",
+              "displayName": "Tower Destroy",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        2336,
+        80
+      ],
+      "id": "1ccbfa77-74a7-4588-91a1-d05da094ab60",
+      "name": "Append row in sheet1",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "lvTuQhFQAKNQ71pw",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2672,
+        -224
+      ],
+      "id": "a677b069-e634-4f31-940e-c731ec1b4bb7",
+      "name": "Wait1",
+      "webhookId": "c9216ed3-0452-430a-8169-24036a4f893a"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2464,
+        -240
+      ],
+      "id": "1bdbc5fc-cec2-4a52-87de-90e429be1f8c",
+      "name": "Loop Over Items1"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "Teams",
+              "cssSelector": "span.name.visible-xs > a",
+              "returnArray": true
+            },
+            {
+              "key": "Match_Win",
+              "cssSelector": ".match-info-header-scoreholder-score",
+              "returnArray": true
+            },
+            {
+              "key": "MatchWinLose",
+              "cssSelector": "div.brkts-popup-spaced.brkts-popup-winloss-icon i",
+              "returnValue": "attribute",
+              "attribute": "class",
+              "returnArray": true
+            },
+            {
+              "key": "Match_Date",
+              "cssSelector": ".timer-object-datetime-only",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        1728,
+        176
+      ],
+      "id": "51a3b82f-0383-492d-a118-8639c8d59150",
+      "name": "HTML3"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Code in JavaScript1 (The URL Fixer) ---\n\nconst inputItems = $input.all();\nlet outputItems = []; // Use 'let' so we can reassign later\nconst totalItems = inputItems.length; // Expected: 128\n\n// --- 2. Process ALL Items (0 to 127) and filter out unwanted links ---\nfor (let i = 0; i < totalItems; i++) {\n    const item = inputItems[i];\n    \n    // Skip the range from index 56 up to and including index 63\n    const skipRange56To63 = (i >= 56 && i <= 63);\n    \n    // Skip the range from index 120 through the end (127)\n    const skipRange120ToEnd = (i >= 120);\n\n    // Check if the current item index matches any exclusion criteria\n    if (skipRange56To63 || skipRange120ToEnd) {\n        continue;\n    }\n\n    const url = item.json.Links; \n\n    if (url && typeof url === 'string') {\n        let fixedUrl = url;\n\n        if (!fixedUrl.startsWith('http://') && !fixedUrl.startsWith('https://')) {\n            fixedUrl = 'https://' + fixedUrl.replace(/^\\/\\//, '');\n        }\n\n        outputItems.push({\n            json: {\n                // The fixed URL is output as 'fullUrl'\n                fullUrl: fixedUrl\n            }\n        });\n    }\n}\n\n\n// To be safe, let's find the correct slice index:\nlet sliceIndex = 0;\nfor (let i = 0; i < 62; i++) { // Count how many items from input 0-61 made it to the output\n    if (i < 56) { // Items 0-55 were NOT skipped by the internal filter\n        sliceIndex++;\n    }\n}\n\n// Slice the array to keep only the items starting from the one corresponding to input index 64.\n// If 56 items were output before the 56-63 skip, we slice off 56 items.\n// Assuming your original code had 56 processed items before index 56.\nconst startIndex = 56;\noutputItems = outputItems.slice(startIndex);\n\n\n// THIS IS THE CRUCIAL LINE: It returns the new, shorter array\nreturn outputItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2304,
+        -240
+      ],
+      "id": "495886b6-9c9f-42b8-b73c-45ec45d95ed2",
+      "name": "Retract URl Links1"
+    },
+    {
+      "parameters": {
+        "url": "https://ph-mpl.com/schedule",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1824,
+        -240
+      ],
+      "id": "93bc7670-de49-4d29-a4fc-2519538e78c5",
+      "name": "MPL PH Website1"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "Links",
+              "cssSelector": "a.button.button-mini.button-match-data",
+              "returnValue": "attribute",
+              "attribute": "href",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        1984,
+        -240
+      ],
+      "id": "1393ecd7-c221-48a9-9796-3e47bb3b18a4",
+      "name": "MPL PH per Game Link1"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "Links",
+        "include": "allOtherFields",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        2144,
+        -240
+      ],
+      "id": "cdbbde21-6c4d-4972-a5a4-9edd8234b949",
+      "name": "URL Link Splitter1"
+    },
+    {
+      "parameters": {
+        "url": "https://liquipedia.net/mobilelegends/MPL/Philippines/Season_16/Regular_Season",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1408,
+        176
+      ],
+      "id": "bba3fc19-9fae-4036-9683-8a4d9d32673f",
+      "name": "URL for Liquipedia1"
+    },
+    {
+      "parameters": {
+        "url": "https://liquipedia.net/mobilelegends/MPL/Philippines/Season_16/Regular_Season",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -320,
+        -400
+      ],
+      "id": "428d12c2-2178-4976-8011-97e99a4f1760",
+      "name": "URL for Liquipedia"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Code in JavaScript1 (The URL Fixer) ---\n\nconst inputItems = $input.all();\nlet outputItems = []; // Use 'let' so we can reassign later\nconst totalItems = inputItems.length; // Expected: 128\n\n// --- 2. Process ALL Items (0 to 127) and filter out unwanted links ---\nfor (let i = 0; i < totalItems; i++) {\n    const item = inputItems[i];\n    \n    // Skip the range from index 56 up to and including index 63\n    const skipRange56To63 = (i >= 56 && i <= 63);\n    \n    // Skip the range from index 120 through the end (127)\n    const skipRange120ToEnd = (i >= 120);\n\n    // Check if the current item index matches any exclusion criteria\n    if (skipRange56To63 || skipRange120ToEnd) {\n        continue;\n    }\n\n    const url = item.json.Links; \n\n    if (url && typeof url === 'string') {\n        let fixedUrl = url;\n\n        if (!fixedUrl.startsWith('http://') && !fixedUrl.startsWith('https://')) {\n            fixedUrl = 'https://' + fixedUrl.replace(/^\\/\\//, '');\n        }\n\n        outputItems.push({\n            json: {\n                // The fixed URL is output as 'fullUrl'\n                fullUrl: fixedUrl\n            }\n        });\n    }\n}\n\n\n// To be safe, let's find the correct slice index:\nlet sliceIndex = 0;\nfor (let i = 0; i < 62; i++) { // Count how many items from input 0-61 made it to the output\n    if (i < 56) { // Items 0-55 were NOT skipped by the internal filter\n        sliceIndex++;\n    }\n}\n\n// Slice the array to keep only the items starting from the one corresponding to input index 64.\n// If 56 items were output before the 56-63 skip, we slice off 56 items.\n// Assuming your original code had 56 processed items before index 56.\nconst startIndex = 56;\noutputItems = outputItems.slice(startIndex);\n\n\n// THIS IS THE CRUCIAL LINE: It returns the new, shorter array\nreturn outputItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        272,
+        -240
+      ],
+      "id": "6a687d55-0ff9-43ba-8ae2-cbbda98423f8",
+      "name": "Retract URl Links2"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        480,
+        -320
+      ],
+      "id": "a06e89a9-7a0f-4fb4-a597-b4e2254a009c",
+      "name": "Merge"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "Links",
+        "include": "allOtherFields",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        64,
+        -240
+      ],
+      "id": "78d62365-14d7-4c54-972e-a7a9eeecb368",
+      "name": "URL Link Splitter"
+    },
+    {
+      "parameters": {
+        "mode": "chooseBranch"
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        624,
+        32
+      ],
+      "id": "679e3706-425c-4511-91e7-91d33d6a55b1",
+      "name": "Merge2"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "Team1_Value",
+              "cssSelector": "div.stats-num h5[style*=\"text-align: left\"]",
+              "returnArray": true
+            },
+            {
+              "key": "Stat_Category",
+              "cssSelector": "div.stats-divider h5",
+              "returnArray": true
+            },
+            {
+              "key": "Team2_Value",
+              "cssSelector": "div.stats-num h5[style*=\"text-align: right\"]",
+              "returnArray": true
+            },
+            {
+              "key": "Date_Value",
+              "cssSelector": "meta[property=\"og:url\"]",
+              "returnValue": "attribute"
+            },
+            {
+              "key": "Red_Side",
+              "cssSelector": "h3[style=\"text-align: right\"]",
+              "returnArray": true
+            },
+            {
+              "key": "Blue_Side",
+              "cssSelector": "div.col-sm-8 h3.mb-0.mt-1"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        -640,
+        544
+      ],
+      "id": "e31df307-8cda-4d51-bd47-6c24e6fb9952",
+      "name": "HTML4"
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1_JjzBsnF_J59HvvdMF4PvAZNPa4woUR6M_R7ET4GwMo",
+          "mode": "list",
+          "cachedResultName": "MPL PH",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_JjzBsnF_J59HvvdMF4PvAZNPa4woUR6M_R7ET4GwMo/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1_JjzBsnF_J59HvvdMF4PvAZNPa4woUR6M_R7ET4GwMo/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Match Date": "={{ $json.Match_Date }}",
+            "Game No.": "={{ $json.Game_Number }}",
+            "Team Name": "={{ $json.Team_Name }}",
+            "Opponent Name": "={{ $json.Opponent_Name }}",
+            "Total Kills": "={{ $json['Total Kills'] }}",
+            "Total Assists": "={{ $json['Total Assists'] }}",
+            "Total Deaths": "={{ $json['Total Deaths'] }}",
+            "Total Gold": "={{ $json['Total Gold'] }}",
+            "Gold/Min": "={{ $json['Gold / Min'] }}",
+            "Total Damage": "={{ $json['Total Damage'] }}",
+            "Damage/Min": "={{ $json['Damage / Min'] }}",
+            "Red Buff": "={{ $json['Red Buff'] }}",
+            "Blue Buff": "={{ $json['Blue Buff'] }}",
+            "Lord Kill": "={{ $json['Lord Kill'] }}",
+            "Turtle Kill": "={{ $json['Tortoise Kill'] }}",
+            "Tower Destroy": "={{ $json['Tower Destroy'] }}",
+            "Win/Lose": "={{ $json.Win_Lose }}",
+            "Match Win/Lose": "={{ $json['Match Win/Lose'] }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Match Date",
+              "displayName": "Match Date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Game No.",
+              "displayName": "Game No.",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Team Name",
+              "displayName": "Team Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Opponent Name",
+              "displayName": "Opponent Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Win/Lose",
+              "displayName": "Win/Lose",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Match Win/Lose",
+              "displayName": "Match Win/Lose",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Side",
+              "displayName": "Side",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Kills",
+              "displayName": "Total Kills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Assists",
+              "displayName": "Total Assists",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Deaths",
+              "displayName": "Total Deaths",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Gold",
+              "displayName": "Total Gold",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Gold/Min",
+              "displayName": "Gold/Min",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Total Damage",
+              "displayName": "Total Damage",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Damage/Min",
+              "displayName": "Damage/Min",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Red Buff",
+              "displayName": "Red Buff",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Blue Buff",
+              "displayName": "Blue Buff",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Lord Kill",
+              "displayName": "Lord Kill",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Turtle Kill",
+              "displayName": "Turtle Kill",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "Tower Destroy",
+              "displayName": "Tower Destroy",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        256,
+        544
+      ],
+      "id": "106b8409-b5ee-42d6-881c-82b086d9b68b",
+      "name": "Append row in sheet2",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "lvTuQhFQAKNQ71pw",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        -816,
+        544
+      ],
+      "id": "059d1f49-af93-4966-8b6a-23aba8828e7d",
+      "name": "Wait2",
+      "webhookId": "c9216ed3-0452-430a-8169-24036a4f893a"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        48,
+        288
+      ],
+      "id": "d3b88ca6-0b7a-45bf-817c-cbb47851aa06",
+      "name": "Loop Over Items2"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "Teams",
+              "cssSelector": "span.name.visible-xs > a",
+              "returnArray": true
+            },
+            {
+              "key": "Match_Win",
+              "cssSelector": ".match-info-header-scoreholder-score",
+              "returnArray": true
+            },
+            {
+              "key": "MatchWinLose",
+              "cssSelector": "div.brkts-popup-spaced.brkts-popup-winloss-icon i",
+              "returnValue": "attribute",
+              "attribute": "class",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        -640,
+        736
+      ],
+      "id": "306bef7f-16de-48f8-b368-20326319fdb3",
+      "name": "HTML5"
+    },
+    {
+      "parameters": {
+        "jsCode": "// --- Code in JavaScript1 (The URL Fixer) ---\n\nconst inputItems = $input.all();\nlet outputItems = []; // Use 'let' so we can reassign later\nconst totalItems = inputItems.length; // Expected: 128\n\n// --- 2. Process ALL Items (0 to 127) and filter out unwanted links ---\nfor (let i = 0; i < totalItems; i++) {\n    const item = inputItems[i];\n    \n    // Skip the range from index 56 up to and including index 63\n    const skipRange56To63 = (i >= 56 && i <= 63);\n    \n    // Skip the range from index 120 through the end (127)\n    const skipRange120ToEnd = (i >= 120);\n\n    // Check if the current item index matches any exclusion criteria\n    if (skipRange56To63 || skipRange120ToEnd) {\n        continue;\n    }\n\n    const url = item.json.Links; \n\n    if (url && typeof url === 'string') {\n        let fixedUrl = url;\n\n        if (!fixedUrl.startsWith('http://') && !fixedUrl.startsWith('https://')) {\n            fixedUrl = 'https://' + fixedUrl.replace(/^\\/\\//, '');\n        }\n\n        outputItems.push({\n            json: {\n                // The fixed URL is output as 'fullUrl'\n                fullUrl: fixedUrl\n            }\n        });\n    }\n}\n\n\n// To be safe, let's find the correct slice index:\nlet sliceIndex = 0;\nfor (let i = 0; i < 62; i++) { // Count how many items from input 0-61 made it to the output\n    if (i < 56) { // Items 0-55 were NOT skipped by the internal filter\n        sliceIndex++;\n    }\n}\n\n// Slice the array to keep only the items starting from the one corresponding to input index 64.\n// If 56 items were output before the 56-63 skip, we slice off 56 items.\n// Assuming your original code had 56 processed items before index 56.\nconst startIndex = 56;\noutputItems = outputItems.slice(startIndex);\n\n\n// THIS IS THE CRUCIAL LINE: It returns the new, shorter array\nreturn outputItems;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -160,
+        288
+      ],
+      "id": "d428bfee-7b86-4ded-9d1a-bda848439e3a",
+      "name": "Retract URl Links"
+    },
+    {
+      "parameters": {
+        "url": "https://ph-mpl.com/schedule",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -784,
+        288
+      ],
+      "id": "905d00ef-3e6e-41b3-8e4d-f3018a0fa4fe",
+      "name": "MPL PH Website2"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "Links",
+              "cssSelector": "a.button.button-mini.button-match-data",
+              "returnValue": "attribute",
+              "attribute": "href",
+              "returnArray": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        -576,
+        288
+      ],
+      "id": "7bbf6217-e10c-45ce-a36b-ea993d747dcc",
+      "name": "MPL PH per Game Link2"
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "Links",
+        "include": "allOtherFields",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -368,
+        288
+      ],
+      "id": "7678e52b-0196-4cf9-9411-ca4c47af0c2e",
+      "name": "URL Link Splitter2"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.fullUrl }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -992,
+        544
+      ],
+      "id": "d1bd1201-c6e0-43ec-9e16-668fb5b97557",
+      "name": "MPL PH per Game Link (in Array)2"
+    },
+    {
+      "parameters": {
+        "url": "https://liquipedia.net/mobilelegends/MPL/Philippines/Season_16/Regular_Season",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -992,
+        736
+      ],
+      "id": "f1385383-20fa-42ac-a542-b8d8cdbd0a58",
+      "name": "URL for Liquipedia2"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        -192,
+        640
+      ],
+      "id": "e62bbe9d-8df7-449f-8c7e-df4b0b7d2def",
+      "name": "Merge3"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        736
+      ],
+      "id": "eefb89f9-2902-47d9-a7fe-54ad12a0253c",
+      "name": "MPL PH Match Wins2",
+      "alwaysOutputData": false
+    },
+    {
+      "parameters": {
+        "jsCode": "// Loop over input items and add a new field called 'myNewField' to the JSON of each one\nfor (const item of $input.all()) {\n  item.json.myNewField = 1;\n}\n\nreturn $input.all();"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        16,
+        640
+      ],
+      "id": "20996efd-3c5e-469b-a151-25167d08ed72",
+      "name": "Code in JavaScript"
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "fieldsToMatchString": "Match_Date, Game_Number, Team_Name, Opponent_Name",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2048,
+        80
+      ],
+      "id": "eccfe23e-41a2-4e26-aa08-e3ea30c0045c",
+      "name": "Merge1"
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2192,
+        80
+      ],
+      "id": "c8bfd63d-4958-465f-874e-20f95ecba62c",
+      "name": "Wait3",
+      "webhookId": "d80971b8-c631-4f2c-a849-65a5ec253337"
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1568,
+        -16
+      ],
+      "id": "efd4735d-99f8-46e2-859f-30177d8ce186",
+      "name": "Wait4",
+      "webhookId": "d87c22a7-0bfd-4bfe-aa37-d35c630f1d9f"
+    },
+    {
+      "parameters": {
+        "amount": 2
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1568,
+        176
+      ],
+      "id": "1ac419e7-06f3-4cf7-bd17-ea47a501d114",
+      "name": "Wait5",
+      "webhookId": "d9a5292a-848e-4984-9bc9-84a29b1686be"
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.all();\n\n// --- 1. Get Input Data ---\n// Assuming $input.all()[0] contains all the extracted HTML data for a single match (1 link)\nconst inputItem = $input.all()[0].json;\n\nconst team1Values = inputItem.Team1_Value; \nconst team2Values = inputItem.Team2_Value; \n// RENAMED: from loseTeamArray to redSideArray (contains names of teams on the red side for each game)\nconst redSideArray = inputItem.Red_Side || []; \n// RENAMED: from winTeamName to blueSideTeamName (assumed winner/blue side of Game 1)\nconst blueSideTeamName = inputItem.Blue_Side; \nconst urlContent = inputItem.Date_Value?.content || ''; \n\n// --- 2. Determine Dynamic Team Names ---\n\n// 1. Collect all known team names from the input\nlet teamNames = [];\nif (blueSideTeamName) {\n    teamNames.push(blueSideTeamName);\n}\n// 2. Add all team names from the Red_Side array\n// Note: We use Red_Side teams because it often lists the team names regardless of win/loss,\n// though only one team per game should be in the array based on the original logic.\nteamNames = teamNames.concat(redSideArray);\n\n// 3. Filter to get the two unique team names\nconst UNIQUE_TEAM_NAMES = teamNames.filter(name => name).filter((v, i, a) => a.indexOf(v) === i);\n\n// Assign them dynamically. PRIMARY_TEAM will be the team associated with team1Values.\nconst PRIMARY_TEAM = UNIQUE_TEAM_NAMES[0] || 'Team_A';\nconst SECONDARY_TEAM = UNIQUE_TEAM_NAMES[1] || 'Team_B';\n\n// --- 3. Extract and Format Date ---\nconst dateMatch = urlContent.match(/(\\d{8})$/); \nlet formattedDate = 'Date Not Found';\n\nif (dateMatch && dateMatch[1]) {\n    const dateString = dateMatch[1];\n    formattedDate = `${dateString.substring(0, 4)}-${dateString.substring(4, 6)}-${dateString.substring(6, 8)}`;\n}\n\n// --- 4. Filter Arrays for Games ---\nconst GAME_LENGTH = 12; // 12 stats per game\n\n// Game 1: Index 0 to 11\nconst game1_team1 = team1Values ? team1Values.slice(0, GAME_LENGTH) : [];\nconst game1_team2 = team2Values ? team2Values.slice(0, GAME_LENGTH) : [];\n\n// Game 2: Index 12 to 23\nconst game2_team1 = team1Values ? team1Values.slice(GAME_LENGTH, GAME_LENGTH * 2) : [];\nconst game2_team2 = team2Values ? team2Values.slice(GAME_LENGTH, GAME_LENGTH * 2) : [];\n\n// Game 3: Index 24 to 35\nconst game3_team1 = team1Values ? team1Values.slice(GAME_LENGTH * 2, GAME_LENGTH * 3) : [];\nconst game3_team2 = team2Values ? team2Values.slice(GAME_LENGTH * 2, GAME_LENGTH * 3) : [];\n\n\n// --- 5. Define Stat Categories ---\nconst STAT_NAMES = [\n    \"Total Kills\", \"Total Assists\", \"Total Deaths\", \"Total Gold\", \n    \"Gold / Min\", \"Total Damage\", \"Damage / Min\", \"Red Buff\", \n    \"Blue Buff\", \"Lord Kill\", \"Tortoise Kill\", \"Tower Destroy\" \n];\n\n// --- New Tracking Variables (Kept for controlling game execution flow) ---\nlet team1MatchWins = 0; \nlet team2MatchWins = 0; \n\n// --- 6. Helper Functions ---\nconst outputItems = [];\n\n/**\n * Checks win counters to determine the overall match result (first to 2 wins).\n */\nfunction updateMatchWins(isPrimaryTeam, winLoss) {\n    if (winLoss === 'W') {\n        if (isPrimaryTeam) {\n            team1MatchWins++;\n        } else {\n            team2MatchWins++;\n        }\n    }\n}\n\n/**\n * Transforms an array of 12 stat values into a single wide object (one row).\n * @param {Array} teamValues - Array of 12 stat values.\n * @param {boolean} isPrimaryTeam - True if data belongs to the team mapped to team1Values.\n * @param {number} gameNumber - The current game number (1, 2, or 3).\n */\nfunction transformGameData(teamValues, isPrimaryTeam, gameNumber) {\n    if (teamValues.length === 0) {\n        return; \n    }\n\n    const teamName = isPrimaryTeam ? PRIMARY_TEAM : SECONDARY_TEAM;\n    const opponentName = isPrimaryTeam ? SECONDARY_TEAM : PRIMARY_TEAM;\n    \n    // Determine the Red Side team for this game\n    const redSideTeam = redSideArray[gameNumber - 1];\n    \n    // Determine Win/Loss: The team not on the Red Side is the Winner (Blue Side)\n    const winLoss = (teamName === redSideTeam) ? 'L' : 'W'; // W or L\n    \n    // --- Win Counting Logic (Only for game execution flow control) ---\n    updateMatchWins(isPrimaryTeam, winLoss);\n    \n    // --- Map W/L to Blue/Red Side (Team_Side column) ---\n    const teamSide = (winLoss === 'W') ? 'Blue' : 'Red';\n\n    // --- Object Construction ---\n    let newObject = {};\n    \n    newObject[\"Match_Date\"] = formattedDate;\n    newObject[\"Game_Number\"] = gameNumber;\n    newObject[\"Team_Name\"] = teamName;\n    newObject[\"Opponent_Name\"] = opponentName;\n    \n    // NOTE: Win_Status row removed as requested.\n    \n    // Team_Side column with Blue/Red value\n    newObject[\"Team_Side\"] = teamSide; \n    \n    // Loop through the values and create STAT NAME columns\n    for (let i = 0; i < teamValues.length; i++) {\n        const statName = STAT_NAMES[i];\n        const statValue = teamValues[i];\n        \n        newObject[statName] = statValue;\n    }\n    \n    outputItems.push({ json: newObject });\n}\n\n\n// --- 7. Execute Transformation for All Games/Teams ---\n\n// Game 1\ntransformGameData(game1_team1, true, 1); // Team 1 (PRIMARY_TEAM)\ntransformGameData(game1_team2, false, 1); // Team 2 (SECONDARY_TEAM)\n\n// Game 2\n// Only run if the match wasn't decided in Game 1 (Wins < 2)\nif (team1MatchWins < 2 && team2MatchWins < 2) {\n    transformGameData(game2_team1, true, 2);\n    transformGameData(game2_team2, false, 2);\n}\n\n// Game 3\n// Only run if the match wasn't decided in Game 2 (Wins < 2)\nif (team1MatchWins < 2 && team2MatchWins < 2) {\n    transformGameData(game3_team1, true, 3);\n    transformGameData(game3_team2, false, 3);\n}\n\n\n// --- 8. Output Final Structured Data ---\nreturn outputItems;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1888,
+        -16
+      ],
+      "id": "9ca6540e-8afe-446f-a069-92ced92928d9",
+      "name": "MPL PH Game Statistics"
+    },
+    {
+      "parameters": {
+        "jsCode": "const inputItems = $input.all();\n// Assuming all necessary data arrays are found under the first input item\nconst inputData = inputItems[0].json;\n\n// Input arrays are assumed to be flat lists: [T1, T2, T3, T4, ...]\nconst teamsInput = inputData.Teams || [];\nconst matchWinInput = inputData.Match_Win || [];\nconst matchWinLoseInput = inputData.MatchWinLose || [];\nconst matchDateInput = inputData.Match_Date || []; // This input array is named Match_Date\n\nconst outputItems = [];\n\n// --- Helper function to convert the class string to 1 (win) or 0 (loss) ---\nfunction statusToWin(statusString) {\n    // We check for the unique class that signifies a win\n    if (typeof statusString === 'string' && statusString.includes('forest-green-text')) {\n        return 1;\n    }\n    return 0;\n}\n\n// --- Helper function to extract and format the date to YYYY-MM-DD ---\nfunction formatMatchDate(dateTimeString) {\n    if (typeof dateTimeString !== 'string' || !dateTimeString) {\n        return '';\n    }\n    \n    // 1. Extract the date part (e.g., \"August 22, 2025\") by splitting on the hyphen\n    const datePart = dateTimeString.split(' - ')[0].trim();\n    \n    // 2. Try to parse the date part using the Date object\n    const date = new Date(datePart);\n    \n    // 3. Check if parsing was successful (Date.parse returns NaN for invalid dates)\n    if (isNaN(date.getTime())) {\n        console.error(`Could not parse date: ${datePart}`);\n        return datePart; // Return original date part if formatting fails\n    }\n    \n    // 4. Format to YYYY-MM-DD\n    const year = date.getFullYear();\n    // Month is 0-indexed, so add 1 and pad with '0'\n    const month = String(date.getMonth() + 1).padStart(2, '0'); \n    // Day of the month, pad with '0'\n    const day = String(date.getDate()).padStart(2, '0');\n    \n    return `${year}-${month}-${day}`;\n}\n\n/**\n * Replaces specified team abbreviations (FLCP, ONPH, TWPH) with their target names.\n * @param {string} teamName - The original team name.\n * @returns {string} The corrected team name.\n */\nfunction normalizeTeamName(teamName) {\n    if (teamName === 'FLCP') {\n        return 'FLCN';\n    }\n    if (teamName === 'ONPH') {\n        return 'ONIC';\n    }\n    if (teamName === 'TWPH') {\n        return 'TWIS';\n    }\n    return teamName;\n}\n\n\n// 1. Index Pre-Calculation (Determine W/L data boundaries for each match)\nconst totalElements = Math.min(teamsInput.length, matchWinInput.length);\nconst totalMatches = Math.floor(totalElements / 2);\n\nlet currentMatchWinLoseIndex = 0;\n// Stores the start index in MatchWinLose for each match\nlet matchWinLoseIndices = []; \n\nfor (let i = 0; i < totalMatches; i++) {\n    const scoreIndex = i * 2;\n    const team1Score = parseInt(matchWinInput[scoreIndex] || '0', 10);\n    const team2Score = parseInt(matchWinInput[scoreIndex + 1] || '0', 10);\n    const totalGames = team1Score + team2Score;\n\n    // Each game uses 2 elements (Team 1 Status, Team 2 Status)\n    const elementsUsed = totalGames * 2;\n\n    matchWinLoseIndices.push(currentMatchWinLoseIndex);\n    currentMatchWinLoseIndex += elementsUsed;\n}\n\n\n// 2. Match Iteration and Pivoting Transformation\nfor (let i = 0; i < totalMatches; i++) {\n    const teamsIndex = i * 2;\n\n    // --- Data Extraction ---\n    // Apply normalization immediately\n    const team1Name = normalizeTeamName(teamsInput[teamsIndex] || '');\n    const team2Name = normalizeTeamName(teamsInput[teamsIndex + 1] || '');\n    const team1OverallScoreStr = matchWinInput[teamsIndex] || '0';\n    const team2OverallScoreStr = matchWinInput[teamsIndex + 1] || '0';\n    \n    // CRITICAL CHANGE: Use 'i' (the match index) to get one date per match\n    const rawDate = matchDateInput[i] || ''; \n    // Call the new formatting function\n    const matchDate = formatMatchDate(rawDate); \n\n    const team1OverallScoreInt = parseInt(team1OverallScoreStr, 10);\n    const team2OverallScoreInt = parseInt(team2OverallScoreStr, 10);\n    const scoreSum = team1OverallScoreInt + team2OverallScoreInt;\n\n\n    // 3. Game Iteration: Only proceed if 2 or 3 games were played\n    if (scoreSum === 2 || scoreSum === 3) {\n        const gamesToProcess = scoreSum;\n        const startWLIndex = matchWinLoseIndices[i];\n\n        // Process the required number of games (2 or 3)\n        for (let game = 0; game < gamesToProcess; game++) {\n            const gameNumber = game + 1;\n            const wlIndex = startWLIndex + (game * 2);\n\n            // W/L status strings from the input\n            const t1Status = matchWinLoseInput[wlIndex];\n            const t2Status = matchWinLoseInput[wlIndex + 1];\n\n            // Convert status to 1 (Win) or 0 (Loss)\n            const t1Win = statusToWin(t1Status);\n            const t2Win = statusToWin(t2Status);\n\n            // Determine Win/Loss status strings for the output column\n            const t1WinStatus = t1Win === 1 ? 'W' : 'L';\n            const t2WinStatus = t2Win === 1 ? 'W' : 'L';\n\n            // --- Pivot: Create two output rows for this single game ---\n\n            // 4. Output Row 1 (Team 1's perspective)\n            outputItems.push({\n                json: {\n                    Match_Date: matchDate, // YYYY-MM-DD format\n                    Game_Number: gameNumber,\n                    Team_Name: team1Name,\n                    Opponent_Name: team2Name,\n                    Win_Status: t1WinStatus,\n                }\n            });\n\n            // 5. Output Row 2 (Team 2's perspective)\n            outputItems.push({\n                json: {\n                    Match_Date: matchDate, // YYYY-MM-DD format\n                    Game_Number: gameNumber,\n                    Team_Name: team2Name,\n                    Opponent_Name: team1Name,\n                    Win_Status: t2WinStatus,\n                }\n            });\n        }\n    }\n}\n\nreturn outputItems;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1888,
+        176
+      ],
+      "id": "504ea751-db64-4abd-82f3-0a6a1ab82ea3",
+      "name": "MPL PH Match Wins3"
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.fullUrl }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1408,
+        -16
+      ],
+      "id": "f838411c-f90c-4269-8b1b-6f979afb30b7",
+      "name": "MPL PH per Game Link3"
     }
   ],
   "pinData": {},
@@ -452,18 +1596,7 @@
       "main": [
         [
           {
-            "node": "HTTP Request1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HTTP Request": {
-      "main": [
-        [
-          {
-            "node": "Wait",
+            "node": "MPL PH Website1",
             "type": "main",
             "index": 0
           }
@@ -474,62 +1607,7 @@
       "main": [
         [
           {
-            "node": "Code in JavaScript",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code in JavaScript": {
-      "main": [
-        [
-          {
-            "node": "Append row in sheet",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HTTP Request1": {
-      "main": [
-        [
-          {
-            "node": "HTML1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "HTML1": {
-      "main": [
-        [
-          {
-            "node": "Split Out",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Split Out": {
-      "main": [
-        [
-          {
-            "node": "Code in JavaScript1",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
-    "Code in JavaScript1": {
-      "main": [
-        [
-          {
-            "node": "Loop Over Items",
+            "node": "Table to Gsheets",
             "type": "main",
             "index": 0
           }
@@ -549,6 +1627,211 @@
     },
     "Append row in sheet": {
       "main": [
+        []
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "MPL PH per Game Link (in Array)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH Website": {
+      "main": [
+        [
+          {
+            "node": "MPL PH per Game Link",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH per Game Link": {
+      "main": [
+        [
+          {
+            "node": "URL Link Splitter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH per Game Link (in Array)": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML2": {
+      "main": [
+        [
+          {
+            "node": "MPL PH Match Wins",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Table to Gsheets": {
+      "main": [
+        [
+          {
+            "node": "Merge2",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "MPL PH Match Wins": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML1": {
+      "main": [
+        [
+          {
+            "node": "MPL PH Game Statistics",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait1": {
+      "main": [
+        [
+          {
+            "node": "MPL PH per Game Link3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items1": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Wait1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML3": {
+      "main": [
+        [
+          {
+            "node": "MPL PH Match Wins3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retract URl Links1": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH Website1": {
+      "main": [
+        [
+          {
+            "node": "MPL PH per Game Link1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH per Game Link1": {
+      "main": [
+        [
+          {
+            "node": "URL Link Splitter1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL Link Splitter1": {
+      "main": [
+        [
+          {
+            "node": "Retract URl Links1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL for Liquipedia1": {
+      "main": [
+        [
+          {
+            "node": "Wait5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL for Liquipedia": {
+      "main": [
+        [
+          {
+            "node": "HTML2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge": {
+      "main": [
         [
           {
             "node": "Loop Over Items",
@@ -558,12 +1841,252 @@
         ]
       ]
     },
-    "Loop Over Items": {
+    "Retract URl Links2": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "URL Link Splitter": {
+      "main": [
+        [
+          {
+            "node": "Retract URl Links2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge2": {
+      "main": [
+        []
+      ]
+    },
+    "HTML4": {
+      "main": [
+        [
+          {
+            "node": "MPL PH Match Wins2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Append row in sheet2": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait2": {
+      "main": [
+        [
+          {
+            "node": "HTML4",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items2": {
       "main": [
         [],
         [
           {
-            "node": "HTTP Request",
+            "node": "MPL PH per Game Link (in Array)2",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "URL for Liquipedia2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "HTML5": {
+      "main": [
+        [
+          {
+            "node": "MPL PH Match Wins2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Retract URl Links": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH Website2": {
+      "main": [
+        [
+          {
+            "node": "MPL PH per Game Link2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH per Game Link2": {
+      "main": [
+        [
+          {
+            "node": "URL Link Splitter2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL Link Splitter2": {
+      "main": [
+        [
+          {
+            "node": "Retract URl Links",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH per Game Link (in Array)2": {
+      "main": [
+        [
+          {
+            "node": "Wait2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "URL for Liquipedia2": {
+      "main": [
+        [
+          {
+            "node": "HTML5",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge3": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH Match Wins2": {
+      "main": [
+        []
+      ]
+    },
+    "Merge1": {
+      "main": [
+        [
+          {
+            "node": "Wait3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait3": {
+      "main": [
+        [
+          {
+            "node": "Append row in sheet1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait4": {
+      "main": [
+        [
+          {
+            "node": "HTML1",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "URL for Liquipedia1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait5": {
+      "main": [
+        [
+          {
+            "node": "HTML3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH Game Statistics": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "MPL PH Match Wins3": {
+      "main": [
+        [
+          {
+            "node": "Merge1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "MPL PH per Game Link3": {
+      "main": [
+        [
+          {
+            "node": "Wait4",
             "type": "main",
             "index": 0
           }
@@ -572,14 +2095,11 @@
     }
   },
   "active": false,
-  "settings": {
-    "executionOrder": "v1"
-  },
-  "versionId": "1e20e1b9-0672-4e1b-b525-f3186f8d4611",
+  "settings": {},
+  "versionId": "4a2353dd-0209-403b-8622-d17f02cca3c6",
   "meta": {
-    "templateCredsSetupCompleted": true,
     "instanceId": "cf458caff3f517571fdc2cde9686bb0625cac1d95ee7c600f588eb5b5decc7a0"
   },
-  "id": "CzDkZ9xCaKyfvf87",
+  "id": "pvFuYxLXmE4UKiIG",
   "tags": []
 }
